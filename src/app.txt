@@ -1,0 +1,92 @@
+// App.jsx
+import React, { useState } from 'react';
+import { CubeProvider } from '@cubejs-client/react';
+import { cubeApi } from './config/cube';
+import SalesData from './components/businessdatausingcubequery';
+import SimpleQueryBuilder from './components/querybuilder';
+import SalesQueryBuilder from './components/SalesQueryBuilder';
+import AdvancedPeriodReport from './components/AdvancedPeriodReport';
+
+function App() {
+  const [view, setView] = useState('hook'); // 'hook', 'simple', or 'interactive'
+
+  return (
+    <CubeProvider cubeApi={cubeApi}>
+      <AdvancedPeriodReport/>
+    </CubeProvider>
+  );
+}
+
+export default App;
+
+// App.jsx
+import React, { useState } from 'react';
+import { CubeProvider } from '@cubejs-client/react';
+import { cubeApi } from './config/cube';
+import SalesData from './components/businessdatausingcubequery';
+import SimpleQueryBuilder from './components/querybuilder';
+import SalesQueryBuilder from './components/SalesQueryBuilder';
+
+function App() {
+  const [view, setView] = useState('hook'); // 'hook', 'simple', or 'interactive'
+
+  return (
+    <CubeProvider cubeApi={cubeApi}>
+      <div style={{ padding: '20px' }}>
+        <h1>Business Analytics Dashboard</h1>
+        
+        {/* View Selector */}
+        <div style={{ marginBottom: '20px' }}>
+          <button 
+            onClick={() => setView('hook')}
+            style={{
+              padding: '10px 20px',
+              marginRight: '10px',
+              backgroundColor: view === 'hook' ? '#1976d2' : '#e0e0e0',
+              color: view === 'hook' ? 'white' : 'black',
+              border: 'none',
+              borderRadius: '4px',
+              cursor: 'pointer'
+            }}
+          >
+            Using Hook
+          </button>
+          <button 
+            onClick={() => setView('simple')}
+            style={{
+              padding: '10px 20px',
+              marginRight: '10px',
+              backgroundColor: view === 'simple' ? '#1976d2' : '#e0e0e0',
+              color: view === 'simple' ? 'white' : 'black',
+              border: 'none',
+              borderRadius: '4px',
+              cursor: 'pointer'
+            }}
+          >
+            Simple QueryBuilder
+          </button>
+          <button 
+            onClick={() => setView('interactive')}
+            style={{
+              padding: '10px 20px',
+              backgroundColor: view === 'interactive' ? '#1976d2' : '#e0e0e0',
+              color: view === 'interactive' ? 'white' : 'black',
+              border: 'none',
+              borderRadius: '4px',
+              cursor: 'pointer'
+            }}
+          >
+            Interactive QueryBuilder
+          </button>
+        </div>
+
+        {/* Render selected view */}
+        {view === 'hook' && <SalesData />}
+        {view === 'simple' && <SimpleQueryBuilder />}
+        {view === 'interactive' && <SalesQueryBuilder />}
+      </div>
+    </CubeProvider>
+  );
+}
+
+export default App;
