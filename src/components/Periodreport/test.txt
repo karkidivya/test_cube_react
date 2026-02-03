@@ -1,0 +1,811 @@
+// DynamicReportFramework.jsx
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { ChevronDown, ChevronUp, Download, RefreshCw, Settings, Copy, Check } from 'lucide-react';
+import { cubeApi } from '../../config/cube'; // Import from your config file
+
+// REMOVE THE MOCK cubeApi - don't redefine it here
+// The mock was conflicting with your actual import
+
+// Report Schema Types
+const COLUMN_TYPES = {
+  STRING: 'string',
+  NUMBER: 'number',
+  CURRENCY: 'currency',
+  PERCENTAGE: 'percentage',
+  DATE: 'date',
+  TIME: 'time',
+  BOOLEAN: 'boolean'
+};
+
+const AGGREGATION_TYPES = {
+  SUM: 'sum',
+  AVG: 'avg',
+  COUNT: 'count',
+  MIN: 'min',
+  MAX: 'max',
+  COUNTDISTINCT: 'countDistinct'
+};
+
+// Enhanced formatter with more options
+class DataFormatter {
+  static format(value, column) {
+    if (value === null || value === undefined) {
+      return column.nullValue || '-';
+    }
+    
+    switch (column.type) {
+      case COLUMN_TYPES.CURRENCY:
+        return new Intl.NumberFormat(column.locale || 'en-US', {
+          style: 'currency',
+          currency: column.currency || 'USD',
+          minimumFractionDigits: column.decimals ?? 2,
+          maximumFractionDigits: column.decimals ?? 2
+        }).format(value);
+      
+      case COLUMN_TYPES.PERCENTAGE:
+        const multiplier = column.percentageMultiplier ?? 1;
+        return `${(Number(value) * multiplier).toFixed(column.decimals || 2)}%`;
+      
+      case COLUMN_TYPES.NUMBER:
+        return new Intl.NumberFormat(column.locale || 'en-US', {
+          minimumFractionDigits: column.decimals || 0,
+          maximumFractionDigits: column.decimals || 0,
+          notation: column.notation || 'standard'
+        }).format(value);
+      
+      case COLUMN_TYPES.DATE:
+        return new Date(value).toLocaleDateString(column.locale || 'en-US', 
+          column.dateFormat || { year: 'numeric', month: '2-digit', day: '2-digit' }
+        );
+      
+      case COLUMN_TYPES.TIME:
+        return `${Number(value).toFixed(0)} ${column.timeUnit || 'min'}`;
+      
+      case COLUMN_TYPES.BOOLEAN:
+        return value ? (column.trueLabel || 'Yes') : (column.falseLabel || 'No');
+      
+      default:
+        return String(value);
+    }
+  }
+  
+  static getCellStyle(value, column, row) {
+    const baseStyle = {
+      padding: '12px',
+      textAlign: column.align || 'left',
+      whiteSpace: column.wrap ? 'normal' : 'nowrap'
+    };
+    
+    // Conditional formatting
+    if (column.conditionalFormatting) {
+      for (const rule of column.conditionalFormatting) {
+        if (this.evaluateCondition(value, rule.condition, rule.value, row)) {
+          return { ...baseStyle, ...rule.style };
+        }
+      }
+    }
+    
+    return baseStyle;
+  }
+  
+  static evaluateCondition(value, condition, targetValue, row) {
+    const numValue = Number(value);
+    const numTarget = Number(targetValue);
+    
+    switch (condition) {
+      case '>': return numValue > numTarget;
+      case '<': return numValue < numTarget;
+      case '>=': return numValue >= numTarget;
+      case '<=': return numValue <= numTarget;
+      case '=': return value === targetValue;
+      case '!=': return value !== targetValue;
+      case 'contains': return String(value).includes(targetValue);
+      case 'startsWith': return String(value).startsWith(targetValue);
+      case 'endsWith': return String(value).endsWith(targetValue);
+      case 'between': 
+        return numValue >= numTarget && numValue <= Number(targetValue.split(',')[1]);
+      case 'custom':
+        // Allow custom function evaluation
+        return typeof targetValue === 'function' ? targetValue(value, row) : false;
+      default:
+        return false;
+    }
+  }
+}
+
+// Data Transformation Engine
+class DataTransformer {
+  static transform(data, definition) {
+    let transformedData = [...data];
+    
+    // Apply filters
+    if (definition.filters) {
+      transformedData = this.applyFilters(transformedData, definition.filters);
+    }
+    
+    // Apply calculations
+    if (definition.calculations) {
+      transformedData = this.applyCalculations(transformedData, definition.calculations);
+    }
+    
+    // Apply grouping
+    if (definition.grouping?.enabled) {
+      transformedData = this.applyGrouping(transformedData, definition.grouping, definition.columns);
+    }
+    
+    // Apply pivoting
+    if (definition.pivot?.enabled) {
+      transformedData = this.applyPivot(transformedData, definition.pivot);
+    }
+    
+    // Apply sorting
+    if (definition.sorting) {
+      transformedData = this.applySorting(transformedData, definition.sorting);
+    }
+    
+    // Apply pagination
+    if (definition.pagination?.enabled) {
+      return this.applyPagination(transformedData, definition.pagination);
+    }
+    
+    return { data: transformedData, totalRows: transformedData.length };
+  }
+  
+  static applyFilters(data, filters) {
+    return data.filter(row => {
+      return filters.every(filter => {
+        const value = row[filter.field];
+        return DataFormatter.evaluateCondition(value, filter.operator, filter.value, row);
+      });
+    });
+  }
+  
+  static applyCalculations(data, calculations) {
+    return data.map(row => {
+      const newRow = { ...row };
+      calculations.forEach(calc => {
+        switch (calc.type) {
+          case 'formula':
+            newRow[calc.field] = this.evaluateFormula(calc.formula, row);
+            break;
+          case 'runningTotal':
+            // Implement running total logic
+            break;
+          case 'percentOfTotal':
+            // Implement percent of total logic
+            break;
+        }
+      });
+      return newRow;
+    });
+  }
+  
+  static evaluateFormula(formula, row) {
+    // Simple formula evaluation - in production, use a proper expression parser
+    let result = formula;
+    Object.keys(row).forEach(key => {
+      result = result.replace(new RegExp(`\\[${key}\\]`, 'g'), row[key]);
+    });
+    try {
+      // Note: eval is dangerous - use a proper expression parser in production
+      return eval(result);
+    } catch (e) {
+      return 'ERROR';
+    }
+  }
+  
+  static applyGrouping(data, groupingConfig, columns) {
+    const { fields, aggregations, showTotals, showSubtotals } = groupingConfig;
+    const grouped = {};
+    
+    // Group data
+    data.forEach(row => {
+      const key = fields.map(f => row[f]).join('|||');
+      if (!grouped[key]) {
+        grouped[key] = {
+          key,
+          values: fields.map(f => ({ field: f, value: row[f] })),
+          rows: []
+        };
+      }
+      grouped[key].rows.push(row);
+    });
+    
+    // Flatten with group headers and aggregations
+    const result = [];
+    Object.values(grouped).forEach(group => {
+      // Add group header
+      result.push({
+        _isGroupHeader: true,
+        _groupKey: group.key,
+        _groupValues: group.values,
+        _level: 0
+      });
+      
+      // Add data rows
+      result.push(...group.rows);
+      
+      // Add group totals if enabled
+      if (showSubtotals || showTotals) {
+        const totals = this.calculateAggregations(group.rows, columns, aggregations);
+        result.push({
+          _isGroupTotal: true,
+          _groupKey: group.key,
+          ...totals
+        });
+      }
+    });
+    
+    // Add grand total if enabled
+    if (showTotals) {
+      const grandTotals = this.calculateAggregations(data, columns, aggregations);
+      result.push({
+        _isGrandTotal: true,
+        ...grandTotals
+      });
+    }
+    
+    return result;
+  }
+  
+  static calculateAggregations(rows, columns, aggregations) {
+    const totals = {};
+    columns.forEach(col => {
+      const agg = aggregations?.[col.field] || col.aggregate;
+      if (agg) {
+        const values = rows.map(r => Number(r[col.field]) || 0);
+        switch (agg) {
+          case AGGREGATION_TYPES.SUM:
+            totals[col.field] = values.reduce((a, b) => a + b, 0);
+            break;
+          case AGGREGATION_TYPES.AVG:
+            totals[col.field] = values.reduce((a, b) => a + b, 0) / values.length;
+            break;
+          case AGGREGATION_TYPES.COUNT:
+            totals[col.field] = values.length;
+            break;
+          case AGGREGATION_TYPES.MIN:
+            totals[col.field] = Math.min(...values);
+            break;
+          case AGGREGATION_TYPES.MAX:
+            totals[col.field] = Math.max(...values);
+            break;
+          case AGGREGATION_TYPES.COUNTDISTINCT:
+            totals[col.field] = new Set(values).size;
+            break;
+        }
+      }
+    });
+    return totals;
+  }
+  
+  static applyPivot(data, pivotConfig) {
+    // Implement pivot transformation
+    // This is a simplified version - full implementation would be more complex
+    const { rowFields, columnField, valueField, aggregation } = pivotConfig;
+    const pivoted = {};
+    const columnValues = new Set();
+    
+    data.forEach(row => {
+      const rowKey = rowFields.map(f => row[f]).join('|||');
+      const colValue = row[columnField];
+      columnValues.add(colValue);
+      
+      if (!pivoted[rowKey]) {
+        pivoted[rowKey] = {};
+        rowFields.forEach(f => pivoted[rowKey][f] = row[f]);
+      }
+      
+      pivoted[rowKey][colValue] = row[valueField];
+    });
+    
+    return Object.values(pivoted);
+  }
+  
+  static applySorting(data, sorting) {
+    const sortArray = Array.isArray(sorting) ? sorting : [sorting];
+    
+    return [...data].sort((a, b) => {
+      for (const sort of sortArray) {
+        const aVal = a[sort.field];
+        const bVal = b[sort.field];
+        
+        let comparison = 0;
+        if (aVal === null || aVal === undefined) comparison = 1;
+        else if (bVal === null || bVal === undefined) comparison = -1;
+        else if (aVal < bVal) comparison = -1;
+        else if (aVal > bVal) comparison = 1;
+        
+        if (comparison !== 0) {
+          return sort.order === 'desc' ? -comparison : comparison;
+        }
+      }
+      return 0;
+    });
+  }
+  
+  static applyPagination(data, pagination) {
+    const { page, pageSize } = pagination;
+    const start = (page - 1) * pageSize;
+    const end = start + pageSize;
+    
+    return {
+      data: data.slice(start, end),
+      totalRows: data.length,
+      totalPages: Math.ceil(data.length / pageSize),
+      currentPage: page
+    };
+  }
+}
+
+// Report Templates
+const REPORT_TEMPLATES = {
+  salesReport: {
+    query: {
+      measures: ['business_sales.gross_revenue', 'business_sales.net_revenue'],
+      dimensions: ['business_sales.TransactionDate', 'business_sales.SalesBusinessName'],
+      filters: [
+        { member: 'business_sales.TransactionDate', operator: 'inDateRange', values: ['last 7 days'] }
+      ]
+    },
+    reportDefinition: {
+      title: 'Sales Performance Report',
+      description: 'Weekly sales performance analysis',
+      columns: [
+        { 
+          field: 'business_sales.TransactionDate', 
+          header: 'Date', 
+          type: 'date',
+          width: 120,
+          sticky: true
+        },
+        { 
+          field: 'business_sales.SalesBusinessName', 
+          header: 'Business', 
+          type: 'string',
+          width: 200
+        },
+        { 
+          field: 'business_sales.gross_revenue', 
+          header: 'Gross Revenue', 
+          type: 'currency',
+          align: 'right',
+          conditionalFormatting: [
+            { condition: '>', value: 5000, style: { backgroundColor: '#d4edda', fontWeight: 'bold' } },
+            { condition: '<', value: 1000, style: { backgroundColor: '#f8d7da' } }
+          ]
+        },
+        { 
+          field: 'business_sales.net_revenue', 
+          header: 'Net Revenue', 
+          type: 'currency',
+          align: 'right'
+        }
+      ],
+      grouping: {
+        enabled: true,
+        fields: ['business_sales.SalesBusinessName'],
+        showTotals: true,
+        showSubtotals: true
+      },
+      sorting: {
+        field: 'business_sales.TransactionDate',
+        order: 'desc'
+      },
+      exportFormats: ['csv', 'excel', 'pdf']
+    }
+  },
+  
+  kpiDashboard: {
+    query: {
+      measures: [
+        'business_sales.gross_revenue',
+        'business_sales.total_transactions',
+        'business_sales.average_check_size'
+      ],
+      dimensions: ['business_sales.TransactionDate'],
+      filters: [
+        { member: 'business_sales.TransactionDate', operator: 'inDateRange', values: ['this month'] }
+      ]
+    },
+    reportDefinition: {
+      title: 'KPI Dashboard',
+      layout: 'dashboard',
+      widgets: [
+        {
+          type: 'scorecard',
+          title: 'Total Revenue',
+          measure: 'business_sales.gross_revenue',
+          format: 'currency',
+          comparison: { period: 'previous month', showChange: true }
+        },
+        {
+          type: 'chart',
+          title: 'Daily Trend',
+          chartType: 'line',
+          measures: ['business_sales.gross_revenue'],
+          dimensions: ['business_sales.TransactionDate']
+        }
+      ]
+    }
+  }
+};
+
+// Main Dynamic Report Generator Component
+export default function DynamicReportFramework() {
+  const [queryJson, setQueryJson] = useState('');
+  const [reportDefinitionJson, setReportDefinitionJson] = useState('');
+  const [data, setData] = useState([]);
+  const [transformedData, setTransformedData] = useState([]);
+  const [columns, setColumns] = useState([]);
+  const [metadata, setMetadata] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [activeTab, setActiveTab] = useState('editor');
+  const [selectedTemplate, setSelectedTemplate] = useState('');
+  const [showMetadata, setShowMetadata] = useState(false);
+  const [copySuccess, setCopySuccess] = useState(false);
+  
+  // Load metadata on mount
+  useEffect(() => {
+    loadMetadata();
+  }, []);
+  
+  const loadMetadata = async () => {
+    try {
+      // Correct way to call Cube.js meta method
+      const meta = await cubeApi.meta();
+      setMetadata(meta);
+    } catch (err) {
+      console.error('Failed to load metadata:', err);
+      // You might want to show this error to the user
+      setError(`Failed to load metadata: ${err.message}`);
+    }
+  };
+  
+  const validateJson = (jsonString, type) => {
+    try {
+      const parsed = JSON.parse(jsonString);
+      if (type === 'query' && (!parsed.measures || !Array.isArray(parsed.measures))) {
+        throw new Error('Query must contain measures array');
+      }
+      if (type === 'reportDefinition' && (!parsed.columns || !Array.isArray(parsed.columns))) {
+        throw new Error('Report definition must contain columns array');
+      }
+      return parsed;
+    } catch (e) {
+      throw new Error(`Invalid ${type} JSON: ${e.message}`);
+    }
+  };
+  
+  const generateReport = async () => {
+    setError(null);
+    setLoading(true);
+    
+    try {
+      const query = validateJson(queryJson, 'query');
+      const reportDef = validateJson(reportDefinitionJson, 'reportDefinition');
+      
+      setColumns(reportDef.columns || []);
+      
+      // Execute query - correct way to use Cube.js
+      const resultSet = await cubeApi.load(query);
+      
+      // Get the data from the result set
+      const rawData = resultSet.tablePivot();
+      setData(rawData);
+      
+      // Apply transformations
+      const transformed = DataTransformer.transform(rawData, reportDef);
+      setTransformedData(transformed.data || transformed);
+      
+      setActiveTab('report');
+    } catch (err) {
+      console.error('Error generating report:', err);
+      setError(err.message || 'Failed to generate report');
+    } finally {
+      setLoading(false);
+    }
+  };
+  
+  const loadTemplate = (templateKey) => {
+    const template = REPORT_TEMPLATES[templateKey];
+    if (template) {
+      setQueryJson(JSON.stringify(template.query, null, 2));
+      setReportDefinitionJson(JSON.stringify(template.reportDefinition, null, 2));
+      setSelectedTemplate(templateKey);
+    }
+  };
+  
+  const exportReport = (format) => {
+    if (format === 'csv') {
+      const headers = columns.map(col => col.header).join(',');
+      const rows = transformedData
+        .filter(row => !row._isGroupHeader && !row._isGroupTotal && !row._isGrandTotal)
+        .map(row => 
+          columns.map(col => {
+            const value = row[col.field];
+            const formatted = DataFormatter.format(value, col);
+            return `"${formatted}"`;
+          }).join(',')
+        ).join('\n');
+      
+      const csv = `${headers}\n${rows}`;
+      const blob = new Blob([csv], { type: 'text/csv' });
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `report_${new Date().toISOString().split('T')[0]}.csv`;
+      a.click();
+      window.URL.revokeObjectURL(url);
+    }
+  };
+  
+  const copyToClipboard = (text) => {
+    navigator.clipboard.writeText(text).then(() => {
+      setCopySuccess(true);
+      setTimeout(() => setCopySuccess(false), 2000);
+    });
+  };
+  
+  const renderReport = () => {
+    if (!transformedData.length) return null;
+    
+    return (
+      <div className="overflow-x-auto shadow-lg rounded-lg">
+        <table className="w-full border-collapse bg-white">
+          <thead>
+            <tr className="bg-gray-50 border-b-2 border-gray-200">
+              {columns.map((col, idx) => (
+                <th
+                  key={idx}
+                  className={`px-4 py-3 text-left font-semibold text-gray-700 ${
+                    col.sticky ? 'sticky left-0 bg-gray-50 z-10' : ''
+                  }`}
+                  style={{
+                    width: col.width || 'auto',
+                    textAlign: col.align || 'left'
+                  }}
+                >
+                  {col.header}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {transformedData.map((row, rowIdx) => {
+              if (row._isGroupHeader) {
+                return (
+                  <tr key={rowIdx} className="bg-blue-50 font-semibold">
+                    <td colSpan={columns.length} className="px-4 py-2">
+                      {row._groupValues?.map(v => v.value).join(' - ')}
+                    </td>
+                  </tr>
+                );
+              }
+              
+              if (row._isGroupTotal) {
+                return (
+                  <tr key={rowIdx} className="bg-gray-100 font-semibold border-t">
+                    {columns.map((col, colIdx) => (
+                      <td
+                        key={colIdx}
+                        className="px-4 py-2"
+                        style={{ textAlign: col.align || 'left' }}
+                      >
+                        {colIdx === 0 ? 'Subtotal:' : DataFormatter.format(row[col.field], col)}
+                      </td>
+                    ))}
+                  </tr>
+                );
+              }
+              
+              if (row._isGrandTotal) {
+                return (
+                  <tr key={rowIdx} className="bg-gray-200 font-bold border-t-2">
+                    {columns.map((col, colIdx) => (
+                      <td
+                        key={colIdx}
+                        className="px-4 py-3"
+                        style={{ textAlign: col.align || 'left' }}
+                      >
+                        {colIdx === 0 ? 'Grand Total:' : DataFormatter.format(row[col.field], col)}
+                      </td>
+                    ))}
+                  </tr>
+                );
+              }
+              
+              return (
+                <tr key={rowIdx} className="border-b hover:bg-gray-50 transition-colors">
+                  {columns.map((col, colIdx) => (
+                    <td
+                      key={colIdx}
+                      className={col.sticky ? 'sticky left-0 bg-white' : ''}
+                      style={DataFormatter.getCellStyle(row[col.field], col, row)}
+                    >
+                      {DataFormatter.format(row[col.field], col)}
+                    </td>
+                  ))}
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    );
+  };
+  
+  return (
+    <div className="min-h-screen bg-gray-100">
+      <div className="max-w-7xl mx-auto p-6">
+        <div className="bg-white rounded-lg shadow-lg p-6 mb-6">
+          <h1 className="text-3xl font-bold text-gray-800 mb-2">Dynamic Report Framework</h1>
+          <p className="text-gray-600">Create powerful reports with JSON-based queries and definitions</p>
+        </div>
+        
+        {/* Tab Navigation */}
+        <div className="bg-white rounded-lg shadow mb-6">
+          <div className="flex border-b">
+            <button
+              onClick={() => setActiveTab('editor')}
+              className={`px-6 py-3 font-medium transition-colors ${
+                activeTab === 'editor' 
+                  ? 'text-blue-600 border-b-2 border-blue-600' 
+                  : 'text-gray-600 hover:text-gray-800'
+              }`}
+            >
+              <Settings className="inline-block w-4 h-4 mr-2" />
+              Configuration
+            </button>
+            <button
+              onClick={() => setActiveTab('report')}
+              className={`px-6 py-3 font-medium transition-colors ${
+                activeTab === 'report' 
+                  ? 'text-blue-600 border-b-2 border-blue-600' 
+                  : 'text-gray-600 hover:text-gray-800'
+              }`}
+              disabled={!transformedData.length}
+            >
+              Report View
+            </button>
+          </div>
+        </div>
+        
+        {activeTab === 'editor' && (
+          <>
+            {/* Template Selection */}
+            <div className="bg-white rounded-lg shadow p-6 mb-6">
+              <h3 className="text-lg font-semibold mb-4">Quick Start Templates</h3>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                {Object.keys(REPORT_TEMPLATES).map(key => (
+                  <button
+                    key={key}
+                    onClick={() => loadTemplate(key)}
+                    className={`px-4 py-2 rounded-lg border transition-all ${
+                      selectedTemplate === key
+                        ? 'bg-blue-500 text-white border-blue-500'
+                        : 'bg-white text-gray-700 border-gray-300 hover:border-blue-400'
+                    }`}
+                  >
+                    {REPORT_TEMPLATES[key].reportDefinition.title}
+                  </button>
+                ))}
+              </div>
+            </div>
+            
+            {/* JSON Editors */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+              <div className="bg-white rounded-lg shadow p-6">
+                <div className="flex justify-between items-center mb-4">
+                  <h3 className="text-lg font-semibold">Query JSON</h3>
+                  <button
+                    onClick={() => copyToClipboard(queryJson)}
+                    className="p-2 text-gray-600 hover:text-blue-600 transition-colors"
+                  >
+                    {copySuccess ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                  </button>
+                </div>
+                <textarea
+                  value={queryJson}
+                  onChange={(e) => setQueryJson(e.target.value)}
+                  className="w-full h-96 p-4 font-mono text-sm border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  placeholder='{"measures": [...], "dimensions": [...], "filters": [...]}'
+                />
+              </div>
+              
+              <div className="bg-white rounded-lg shadow p-6">
+                <div className="flex justify-between items-center mb-4">
+                  <h3 className="text-lg font-semibold">Report Definition JSON</h3>
+                  <button
+                    onClick={() => copyToClipboard(reportDefinitionJson)}
+                    className="p-2 text-gray-600 hover:text-blue-600 transition-colors"
+                  >
+                    {copySuccess ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                  </button>
+                </div>
+                <textarea
+                  value={reportDefinitionJson}
+                  onChange={(e) => setReportDefinitionJson(e.target.value)}
+                  className="w-full h-96 p-4 font-mono text-sm border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  placeholder='{"title": "...", "columns": [...], "grouping": {...}}'
+                />
+              </div>
+            </div>
+            
+            {/* Action Buttons */}
+            <div className="flex justify-center gap-4 mb-6">
+              <button
+                onClick={generateReport}
+                disabled={loading || !queryJson || !reportDefinitionJson}
+                className={`px-8 py-3 rounded-lg font-medium transition-all transform hover:scale-105 ${
+                  loading || !queryJson || !reportDefinitionJson
+                    ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                    : 'bg-blue-600 text-white hover:bg-blue-700 shadow-lg'
+                }`}
+              >
+                {loading ? (
+                  <>
+                    <RefreshCw className="inline-block w-4 h-4 mr-2 animate-spin" />
+                    Generating...
+                  </>
+                ) : (
+                  'Generate Report'
+                )}
+              </button>
+              
+              <button
+                onClick={() => setShowMetadata(!showMetadata)}
+                className="px-6 py-3 bg-gray-600 text-white rounded-lg font-medium hover:bg-gray-700 transition-colors"
+              >
+                {showMetadata ? 'Hide' : 'Show'} Metadata
+              </button>
+            </div>
+            
+            {/* Error Display */}
+            {error && (
+              <div className="bg-red-50 border border-red-200 text-red-700 px-6 py-4 rounded-lg mb-6">
+                <strong className="font-semibold">Error:</strong> {error}
+              </div>
+            )}
+            
+            {/* Metadata Display */}
+            {showMetadata && metadata && (
+              <div className="bg-white rounded-lg shadow p-6">
+                <h3 className="text-lg font-semibold mb-4">Available Cubes & Views</h3>
+                <div className="max-h-96 overflow-y-auto">
+                  <pre className="text-xs font-mono bg-gray-50 p-4 rounded">
+                    {JSON.stringify(metadata, null, 2)}
+                  </pre>
+                </div>
+              </div>
+            )}
+          </>
+        )}
+        
+        {activeTab === 'report' && transformedData.length > 0 && (
+          <div className="bg-white rounded-lg shadow p-6">
+            <div className="flex justify-between items-center mb-6">
+              <h2 className="text-2xl font-bold text-gray-800">
+                {JSON.parse(reportDefinitionJson).title || 'Report Results'}
+              </h2>
+              <button
+                onClick={() => exportReport('csv')}
+                className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors flex items-center gap-2"
+              >
+                <Download className="w-4 h-4" />
+                Export CSV
+              </button>
+            </div>
+            
+            {renderReport()}
+            
+            <div className="mt-4 text-sm text-gray-600">
+              Showing {transformedData.filter(r => !r._isGroupHeader && !r._isGroupTotal).length} rows
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
